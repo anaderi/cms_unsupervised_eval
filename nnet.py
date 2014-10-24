@@ -99,7 +99,7 @@ class SimpleNeuralNetwork(AbstractNeuralNetwork):
 class MultiLayerNetwork(AbstractNeuralNetwork):
     def prepare(self):
         activation = lambda input: input
-        for i, layer in enumerate(self.layers)[1:]:
+        for i, layer in list(enumerate(self.layers))[1:]:
             W = theano.shared(value=numpy.random.normal(size=[self.layers[i], self.layers[i-1]]).astype(floatX))
             self.parameters[i] = W
             activation_old = activation
