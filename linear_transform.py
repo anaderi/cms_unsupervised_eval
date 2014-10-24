@@ -1,6 +1,5 @@
 import numpy
 import pylab
-import utils
 from sklearn.neighbors import NearestNeighbors
 from sklearn.utils.validation import check_arrays
 
@@ -117,27 +116,6 @@ def sandwich_data(num_classes=6, num_points=22, dist=0.4):
 def gauss_data(n_samples=1000, n_features=10, classes=5, std=1.):
     from sklearn.datasets import make_blobs
     return make_blobs(n_samples=n_samples, n_features=n_features, cluster_std=std, centers=classes)
-
-
-def demo():
-    inv_potential = power_potential()
-    data = numpy.random.normal(0, 0.4, size=[200, 2])
-    labels = numpy.random.random(size=200) > 0.5
-    data[labels, :] += 0.7
-
-    data, labels = sandwich_data(dist=.1)
-    # data, labels = gauss_data()
-
-    for stage, transform in enumerate(generate_linear_transform(data, labels, n_neighbors=30, iterations=1000, eps=0.1,
-        max_class_data_on_iteration=50, balance_forces=True, potential=inv_potential)):
-        print transform
-        confusion_matrix = utils.distance_quality_matrix(data, labels, n_neighbors=20)
-        if stage % 100 == 0:
-            X_new = numpy.dot(data, transform)
-            plot_data(X_new, labels)
-
-if __name__ == '__main__':
-    demo()
 
 
 

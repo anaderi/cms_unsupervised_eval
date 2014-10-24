@@ -1,20 +1,12 @@
 # About
 
 # This module contains some helpful and commonly used functions
-from __future__ import print_function
-from __future__ import division
-
-import itertools
 
 import numpy
 import pandas
 import pylab
 import sklearn
 from sklearn.neighbors.unsupervised import NearestNeighbors
-from sklearn.base import TransformerMixin, BaseEstimator
-import os
-
-
 
 __author__ = 'Alex Rogozhnikov'
 
