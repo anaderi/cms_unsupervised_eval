@@ -32,9 +32,11 @@ class AbstractNeuralNetwork(BaseEstimator, ClassifierMixin):
         self.classes_ = numpy.array([0, 1])
 
     def prepare(self):
+        # This method should be overloaded by descendant
         raise NotImplementedError()
 
     def _prepare(self):
+        self.prepare()
         activation = self.activation
         loss_ = lambda x, y, w: self.loss(y, activation(x), w)
         x = T.matrix('X')
