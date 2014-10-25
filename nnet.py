@@ -98,10 +98,9 @@ class SimpleNeuralNetwork(AbstractNeuralNetwork):
 
 class MultiLayerNetwork(AbstractNeuralNetwork):
     def prepare(self):
-        activation = lambda input: input
+        activations = [lambda input: input]
         for i, layer in list(enumerate(self.layers))[1:]:
-            W = theano.shared(value=numpy.random.normal(size=[self.layers[i], self.layers[i-1]]).astype(floatX))
+            W = theano.shared(value=numpy.random.normal(size=[self.layers[i], self.layers[i-1]]), name='W' + str(i))
             self.parameters[i] = W
-            activation_old = activation
-            activation = lambda input: T.nnet.sigmoid(activation_old(input))
-        self.activation = activation
+            activations.append(lambda input, i=i: T.nnet.sigmoid(T.dot(self.parameters[i], activations[i - 1](input))))
+        self.activation = activations[-1]
