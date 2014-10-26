@@ -3,7 +3,7 @@ import numpy
 import theano
 import theano.tensor as T
 from sklearn.base import BaseEstimator, ClassifierMixin
-import utils
+from . import utils
 floatX = theano.config.floatX
 __author__ = 'Alex Rogozhnikov'
 
@@ -16,6 +16,10 @@ def squared_loss(y, pred, w):
 
 def log_loss(y, pred, w):
     return -T.mean(w * (y * T.log(pred) + (1 - y) * T.log(1 - pred)))
+
+
+def ada_loss(y, pred, w):
+    return T.mean(w * T.exp(pred * (1 - 2. * y)))
 
 
 # TODO think of dropper and noises
