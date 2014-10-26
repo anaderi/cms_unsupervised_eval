@@ -22,9 +22,9 @@ def ada_loss(y, pred, w):
     return T.mean(w * T.exp(pred * (1 - 2. * y)))
 
 
-# TODO think of dropper and noises
+# TODO think of dropper and noises (and maybe something else)
 class AbstractNeuralNetwork(BaseEstimator, ClassifierMixin):
-    def __init__(self, layers, learning_rate=0.01, loss=squared_loss, stages=1000, batch=90):
+    def __init__(self, layers, loss=log_loss, learning_rate=0.01, stages=1000, batch=90):
         self.layers = layers
         self.learning_rate = learning_rate
         self.stages = stages
@@ -91,8 +91,7 @@ class SimpleNeuralNetwork(AbstractNeuralNetwork):
     def prepare(self):
         assert len(self.layers) == 3 and self.layers[2] == 1
         n1, n2, n3 = self.layers
-        # self.Dropper = theano.shared(value=numpy.random.ones(size=n2).astype(theano.config.floatX),
-        # name='D', borrow=True)
+        # self.Dropper = theano.shared(value=numpy.random.ones(size=n2).astype(theano.config.floatX), name='D')
         W1 = theano.shared(value=numpy.random.normal(size=[n2, n1]).astype(floatX), name='W1')
         W2 = theano.shared(value=numpy.random.normal(size=[n3, n2]).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
@@ -105,9 +104,11 @@ class SimpleNeuralNetwork(AbstractNeuralNetwork):
 
 class MultiLayerNetwork(AbstractNeuralNetwork):
     def prepare(self):
-        activations = [lambda input: input]
+        activations = [lambda x: x]
         for i, layer in list(enumerate(self.layers))[1:]:
             W = theano.shared(value=numpy.random.normal(size=[self.layers[i], self.layers[i-1]]), name='W' + str(i))
             self.parameters[i] = W
-            activations.append(lambda input, i=i: T.nnet.sigmoid(T.dot(self.parameters[i], activations[i - 1](input))))
+            activations.append(lambda x, i=i: T.nnet.sigmoid(T.dot(self.parameters[i], activations[i - 1](x))))
         return activations[-1]
+
+
