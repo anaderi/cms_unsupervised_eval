@@ -7,6 +7,7 @@ import pandas
 import pylab
 import sklearn
 from sklearn.neighbors.unsupervised import NearestNeighbors
+from sklearn.base import BaseEstimator, TransformerMixin
 
 __author__ = 'Alex Rogozhnikov'
 

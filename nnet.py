@@ -17,6 +17,7 @@ def squared_loss(y, pred, w):
 def log_loss(y, pred, w):
     return -T.mean(w * (y * T.log(pred) + (1 - y) * T.log(1 - pred)))
 
+
 # TODO think of dropper and noises
 class AbstractNeuralNetwork(BaseEstimator, ClassifierMixin):
     def __init__(self, layers, learning_rate=0.01, loss=squared_loss, stages=1000, batch=90):
@@ -36,8 +37,7 @@ class AbstractNeuralNetwork(BaseEstimator, ClassifierMixin):
         raise NotImplementedError()
 
     def _prepare(self):
-        self.prepare()
-        activation = self.activation
+        activation = self.prepare()
         loss_ = lambda x, y, w: self.loss(y, activation(x), w)
         x = T.matrix('X')
         y = T.vector('y')
@@ -58,7 +58,7 @@ class AbstractNeuralNetwork(BaseEstimator, ClassifierMixin):
         sample_weight /= numpy.mean(sample_weight)
         return self.Loss(X.transpose(), y, sample_weight)
 
-    def fit(self, X, y, sample_weight=None, stages=None, batch=None, learning_rate=None):
+    def fit(self, X, y, sample_weight=None, stages=None, batch=None, learning_rate=None, penalty=0.0001):
         if not self.prepared:
             self._prepare()
             self.prepared = True
@@ -79,13 +79,16 @@ class AbstractNeuralNetwork(BaseEstimator, ClassifierMixin):
             wp = sample_weight[indices]
             for name in self.parameters:
                 der = self.derivatives[name](Xp, yp, wp)
-                self.parameters[name].set_value(self.parameters[name].get_value() - learning_rate * der)
+                val = self.parameters[name].get_value() * (1. - learning_rate * penalty) - learning_rate * der
+                self.parameters[name].set_value(val)
 
 
 class SimpleNeuralNetwork(AbstractNeuralNetwork):
     def prepare(self):
         assert len(self.layers) == 3 and self.layers[2] == 1
         n1, n2, n3 = self.layers
+        # self.Dropper = theano.shared(value=numpy.random.ones(size=n2).astype(theano.config.floatX),
+        # name='D', borrow=True)
         W1 = theano.shared(value=numpy.random.normal(size=[n2, n1]).astype(floatX), name='W1')
         W2 = theano.shared(value=numpy.random.normal(size=[n3, n2]).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
@@ -93,7 +96,7 @@ class SimpleNeuralNetwork(AbstractNeuralNetwork):
         def activation(input):
             first = T.nnet.sigmoid(T.dot(W1, input))
             return T.nnet.sigmoid(T.dot(W2, first))
-        self.activation = activation
+        return activation
 
 
 class MultiLayerNetwork(AbstractNeuralNetwork):
@@ -103,4 +106,4 @@ class MultiLayerNetwork(AbstractNeuralNetwork):
             W = theano.shared(value=numpy.random.normal(size=[self.layers[i], self.layers[i-1]]), name='W' + str(i))
             self.parameters[i] = W
             activations.append(lambda input, i=i: T.nnet.sigmoid(T.dot(self.parameters[i], activations[i - 1](input))))
-        self.activation = activations[-1]
+        return activations[-1]
