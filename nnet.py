@@ -3,7 +3,8 @@ import numpy
 import theano
 import theano.tensor as T
 from sklearn.base import BaseEstimator, ClassifierMixin
-from . import utils
+
+import utils
 floatX = theano.config.floatX
 __author__ = 'Alex Rogozhnikov'
 
