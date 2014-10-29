@@ -42,7 +42,7 @@ def sgd_trainer(x, y, w, parameters, derivatives, loss, stages=1000, batch=10, l
 def rprop_trainer(x, y, w, parameters, derivatives, loss, stages=100, max_stage_samples=1000,
                   positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-3):
     """ IRPROP- trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.21.3428 """
-    deltas = dict([(name, 0.05 * numpy.ones_like(p)) for name, p in parameters.iteritems()])
+    deltas = dict([(name, min_step * numpy.ones_like(p)) for name, p in parameters.iteritems()])
     prev_derivatives = dict([(name, numpy.zeros_like(p)) for name, p in parameters.iteritems()])
     xT = x.T
     for _ in range(stages):
@@ -63,7 +63,7 @@ trainers = {'sgd': sgd_trainer, 'rprop': rprop_trainer}
 
 # TODO think of dropper and noises (and maybe something else)
 class AbstractNeuralNetwork(BaseEstimator, ClassifierMixin):
-    def __init__(self, layers=None, loss=log_loss, trainer='backprop', trainer_parameters=None):
+    def __init__(self, layers=None, loss=log_loss, trainer='sgd', trainer_parameters=None):
         """
         Constructs the neural network based on Theano (for classification purposes).
         Works in sklearn fit-predict way: X is [n_samples, n_features], y is [n_samples], sample_weight is [n_samples].
