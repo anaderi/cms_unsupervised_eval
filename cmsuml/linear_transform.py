@@ -1,3 +1,4 @@
+from __future__ import division, print_function
 import numpy
 import pylab
 from sklearn.neighbors import NearestNeighbors
