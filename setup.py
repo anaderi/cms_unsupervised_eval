@@ -15,7 +15,7 @@ setup(
 
     # Author details
     author='Alex Rogozhnikov',
-    author_email='antares@yandex-team.ru',
+    author_email='axelr@yandex-team.ru',
 
     # Choose your license
     license='Yandex',

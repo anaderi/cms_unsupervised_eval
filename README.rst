@@ -1,6 +1,6 @@
-===================================
+==========================================
 CMS unsupervised machine learning (CMSUML)
-===================================
+==========================================
 
 The project is intended to find good features / distance functions for the data from CMS experiment.
 This set of features should discriminate different decay channels.
