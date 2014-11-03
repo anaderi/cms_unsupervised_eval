@@ -1,7 +1,7 @@
-# About
-
-# This module contains some helpful and commonly used functions
-
+"""
+Module contains some helpful and frequently used functions
+"""
+from __future__ import division, print_function, absolute_import
 import numpy
 import pandas
 import pylab
@@ -54,7 +54,8 @@ def check_sample_weight(y_true, sample_weight):
 
 
 def distance_quality_matrix(X, y, n_neighbors=50):
-    """On of the ways to measure the quality of knning"""
+    """On of the ways to measure the quality of knning: each element
+    shows how frequently events of class A are met in knn of labels of class B"""
     labels = numpy.unique(y)
     nn = NearestNeighbors(n_neighbors=n_neighbors)
     nn.fit(X)
@@ -63,7 +64,6 @@ def distance_quality_matrix(X, y, n_neighbors=50):
     for label1, labels2 in zip(y, numpy.take(y, knn_indices)):
         for label2 in labels2:
             confusion_matrix[label1, label2] += 1
-
     return confusion_matrix
 
 

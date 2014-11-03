@@ -57,16 +57,15 @@ def sgd_trainer(x, y, w, parameters, derivatives, loss,
             parameters[name].set_value(val)
 
 
-def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100, max_stage_samples=1000,
+def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                          positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
     """ IRPROP- trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.21.3428 """
     deltas = dict([(name, 1e-3 * numpy.ones_like(p)) for name, p in parameters.iteritems()])
     prev_derivatives = dict([(name, numpy.zeros_like(p)) for name, p in parameters.iteritems()])
     xT = x.T
     for _ in range(stages):
-        xTp, yp, wp = get_batch(xT, y, w, batch=max_stage_samples, random=random)
         for name in parameters:
-            new_derivative = derivatives[name](xTp, yp, wp)
+            new_derivative = derivatives[name](xT, y, w)
             old_derivative = prev_derivatives[name]
             delta = deltas[name]
             delta = numpy.where(new_derivative * old_derivative > 0, delta * positive_step, delta * negative_step)
@@ -78,7 +77,7 @@ def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100, max
             prev_derivatives[name] = new_derivative
 
 
-def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100, max_stage_samples=1000,
+def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
     """IRPROP+ trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.17.1332"""
     deltas = dict([(name, 1e-3 * numpy.ones_like(p)) for name, p in parameters.iteritems()])
@@ -86,13 +85,13 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100, max_
     prev_loss_value = 1e10
     xT = x.T
     for _ in range(stages):
-        xTp, yp, wp = get_batch(xT, y, w, batch=max_stage_samples, random=random)
-        loss_value = loss(xTp, yp, wp)
+        loss_value = loss(xT, y, w)
         for name in parameters:
-            new_derivative = derivatives[name](xTp, yp, wp)
+            new_derivative = derivatives[name](xT, y, w)
             old_derivative = prev_derivatives[name]
             val = parameters[name].get_value()
             delta = deltas[name]
+            # TODO this is wrong IRPROP+ implementation
             if loss_value > prev_loss_value:
                 # step back
                 val += numpy.where(new_derivative * old_derivative < 0, delta * numpy.sign(old_derivative), 0)
@@ -104,6 +103,27 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100, max_
             new_derivative[new_derivative * old_derivative < 0] = 0
             prev_derivatives[name] = new_derivative
         prev_loss_value = loss_value
+
+
+def irprop_extended_trainer(x, y, w, parameters, derivatives, loss, stages=100,
+                            positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
+    """ Modified version of irprop """
+    deltas = dict([(name, 1e-3 * numpy.ones_like(p)) for name, p in parameters.iteritems()])
+    prev_derivatives = dict([(name, numpy.zeros_like(p)) for name, p in parameters.iteritems()])
+    xT = x.T
+    for _ in range(stages):
+        for name in parameters:
+            new_derivative = derivatives[name](xT, y, w)
+            old_derivative = prev_derivatives[name]
+            delta = deltas[name]
+            delta = numpy.where(new_derivative * old_derivative > 0, delta * positive_step, delta * negative_step)
+            delta = numpy.clip(delta, min_step, max_step)
+            deltas[name] = delta
+            val = parameters[name].get_value()
+            parameters[name].set_value(val - delta * numpy.sign(new_derivative))
+            new_derivative[new_derivative * old_derivative < 0] = 0
+            prev_derivatives[name] = new_derivative
+
 
 
 trainers = {'sgd': sgd_trainer, 'irprop-': irprop_minus_trainer, 'irprop+': irprop_plus_trainer}
@@ -213,11 +233,11 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
 #region Neural networks
 
 class SimpleNeuralNetwork(AbstractNeuralNetworkClassifier):
-    """The most simple NN with one hidden layer (sigmoid activation) """
+    """The most simple NN with one hidden layer (sigmoid activation), for example purposes """
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=numpy.random.normal(size=[n2, n1]).astype(floatX), name='W1')
-        W2 = theano.shared(value=numpy.random.normal(size=[n3, n2]).astype(floatX), name='W2')
+        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n3, n2]).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
@@ -231,7 +251,7 @@ class MultiLayerNetwork(AbstractNeuralNetworkClassifier):
     def prepare(self):
         activations = [lambda x: x]
         for i, layer in list(enumerate(self.layers))[1:]:
-            W = theano.shared(value=numpy.random.normal(size=[self.layers[i], self.layers[i-1]]), name='W' + str(i))
+            W = theano.shared(value=self.random_state.normal(size=[self.layers[i], self.layers[i-1]]), name='W' + str(i))
             self.parameters[i] = W
             # j = i trick is to avoid lambda-capturing of i
             activations.append(lambda x, j=i: T.nnet.sigmoid(T.dot(self.parameters[j], activations[j - 1](x))))
@@ -242,8 +262,8 @@ class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
     """One hidden layer with normalized RBF activation (Radial Basis Function)"""
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=numpy.random.normal(size=[n2, n1]).astype(floatX), name='W1')
-        W2 = theano.shared(value=numpy.random.normal(size=[n3, n2]).astype(floatX), name='W2')
+        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n3, n2]).astype(floatX), name='W2')
         G  = theano.shared(value=0.1, name='G')
         self.parameters = {'W1': W1, 'W2': W2, 'G': G}
 
@@ -259,13 +279,30 @@ class SoftmaxNeuralNetwork(AbstractNeuralNetworkClassifier):
     """One hidden layer, softmax activation function """
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=numpy.random.normal(size=[n2, n1]).astype(floatX), name='W1')
-        W2 = theano.shared(value=numpy.random.normal(size=[n3, n2]).astype(floatX), name='W2')
+        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n3, n2]).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
             first = T.nnet.softmax(T.dot(W1, input))
             return T.nnet.sigmoid(T.dot(W2, first))
+        return activation
+
+
+class PairwiseNeuralNetwork(AbstractNeuralNetworkClassifier):
+    """The result is computed as h = sigmoid(Ax), output = sum_{ij} B_ij h_i h_j """
+    def prepare(self):
+        n1, n2, n3 = self.layers
+        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n2, n2, 1]).astype(floatX), name='W2',
+                           broadcastable=[False, False, True])
+        self.parameters = {'W1': W1, 'W2': W2}
+
+        def activation(input):
+            first = T.tanh(T.dot(W1, input))
+            second = first.reshape([n2, 1, input.shape[1]]) * first.reshape([1, n2, input.shape[1]])
+            return T.nnet.sigmoid(T.sum(W2 * second, axis=[0, 1]))
+
         return activation
 
 #endregion
