@@ -16,11 +16,15 @@ def test_nnet(n_samples=200, n_features=5, distance=0.5):
                                                                   - numpy.ones(n_features) * distance])
     for trainer in nnet.trainers:
         for loss in [nnet.squared_loss, nnet.log_loss, nnet.ada_loss]:
-            for NNType in [nnet.RBFNeuralNetwork, nnet.SimpleNeuralNetwork,
-                           nnet.MultiLayerNetwork, nnet.SoftmaxNeuralNetwork]:
+            for NNType in [
+                           # nnet.ObliviousNeuralNetwork,
+                           nnet.SimpleNeuralNetwork,
+                           nnet.MultiLayerNetwork,
+                           nnet.SoftmaxNeuralNetwork,
+                           nnet.RBFNeuralNetwork,
+                           nnet.PairwiseNeuralNetwork
+                          ]:
                 nn = NNType(layers=[n_features, 5, 1], loss=loss, trainer=trainer)
-                nn.fit(X, y)
+                nn.fit(X, y, stages=100)
 
                 print(nn, roc_auc_score(y, nn.predict_proba(X)[:, 1]))
-
-

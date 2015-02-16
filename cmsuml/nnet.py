@@ -1,16 +1,17 @@
 """
-This is simple version of neuralNetworks, which can be easily adopted.
+Minimalistic version of feed-forward neural networks on theano.
 The neural networks from this library provide sklearn classifier's interface.
 """
 from __future__ import print_function, division
 
 import numpy
-from sklearn.utils.validation import check_random_state
 import theano
 import theano.tensor as T
+from sklearn.utils.validation import check_random_state
 from sklearn.base import BaseEstimator, ClassifierMixin
 
-from cmsuml import utils
+from . import utils
+from scipy.special import expit
 
 
 floatX = theano.config.floatX
@@ -20,17 +21,24 @@ __author__ = 'Alex Rogozhnikov'
 #region Loss functions
 
 def squared_loss(y, pred, w):
-    return T.mean(w * (y - pred) ** 2)
+    return T.mean(w * (y - T.nnet.sigmoid(pred)) ** 2)
 
 
 def log_loss(y, pred, w):
-    return -T.mean(w * (y * T.log(pred) + (1 - y) * T.log(1 - pred)))
+    margin = (1 - 2 * y) * pred
+    return T.mean(w * T.log(1 + T.exp(margin)))
 
 
 def ada_loss(y, pred, w):
     """important - ada loss should be used with nnets without sigmoid,
     output should be arbitrary real, not [0,1]"""
-    return T.mean(w * T.exp(pred * (1 - 2. * y)))
+    margin = pred * (1 - 2. * y)
+    return T.mean(w * T.exp(margin))
+
+
+# regression loss
+def mse_loss(y, pred, w):
+    return T.mean(w * (y - pred) ** 2)
 
 #endregion
 
@@ -105,25 +113,6 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
         prev_loss_value = loss_value
 
 
-def irprop_extended_trainer(x, y, w, parameters, derivatives, loss, stages=100,
-                            positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
-    """ Modified version of irprop """
-    deltas = dict([(name, 1e-3 * numpy.ones_like(p)) for name, p in parameters.iteritems()])
-    prev_derivatives = dict([(name, numpy.zeros_like(p)) for name, p in parameters.iteritems()])
-    xT = x.T
-    for _ in range(stages):
-        for name in parameters:
-            new_derivative = derivatives[name](xT, y, w)
-            old_derivative = prev_derivatives[name]
-            delta = deltas[name]
-            delta = numpy.where(new_derivative * old_derivative > 0, delta * positive_step, delta * negative_step)
-            delta = numpy.clip(delta, min_step, max_step)
-            deltas[name] = delta
-            val = parameters[name].get_value()
-            parameters[name].set_value(val - delta * numpy.sign(new_derivative))
-            new_derivative[new_derivative * old_derivative < 0] = 0
-            prev_derivatives[name] = new_derivative
-
 
 
 trainers = {'sgd': sgd_trainer, 'irprop-': irprop_minus_trainer, 'irprop+': irprop_plus_trainer}
@@ -186,7 +175,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         :return: numpy.array of shape [n_samples, n_classes]
         """
         result = numpy.zeros([len(X), 2])
-        result[:, 1] = self.Activation(X.transpose())
+        result[:, 1] = expit(self.Activation(X.transpose()))
         result[:, 0] = 1 - result[:, 1]
         return result
 
@@ -242,7 +231,7 @@ class SimpleNeuralNetwork(AbstractNeuralNetworkClassifier):
 
         def activation(input):
             first = T.nnet.sigmoid(T.dot(W1, input))
-            return T.nnet.sigmoid(T.dot(W2, first))
+            return T.dot(W2, first)
         return activation
 
 
@@ -254,8 +243,9 @@ class MultiLayerNetwork(AbstractNeuralNetworkClassifier):
             W = theano.shared(value=self.random_state.normal(size=[self.layers[i], self.layers[i-1]]), name='W' + str(i))
             self.parameters[i] = W
             # j = i trick is to avoid lambda-capturing of i
-            activations.append(lambda x, j=i: T.nnet.sigmoid(T.dot(self.parameters[j], activations[j - 1](x))))
-        return activations[-1]
+            pred_activation = lambda x, j=i: T.dot(self.parameters[j], activations[j - 1](x))
+            activations.append(lambda x, j=i: T.nnet.sigmoid(pred_activation(x, j)))
+        return pred_activation
 
 
 class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
@@ -271,7 +261,7 @@ class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
             translation_vectors = W1.reshape((W1.shape[0], 1, -1)) - input.transpose().reshape((1, input.shape[1], -1))
             minkowski_distances = (abs(translation_vectors) ** 2).sum(2)
             first = T.nnet.softmax(- (0.001 + G * G) * minkowski_distances)
-            return T.nnet.sigmoid(T.dot(W2, first))
+            return T.dot(W2, first)
         return activation
 
 
@@ -285,7 +275,7 @@ class SoftmaxNeuralNetwork(AbstractNeuralNetworkClassifier):
 
         def activation(input):
             first = T.nnet.softmax(T.dot(W1, input))
-            return T.nnet.sigmoid(T.dot(W2, first))
+            return T.dot(W2, first)
         return activation
 
 
@@ -294,14 +284,35 @@ class PairwiseNeuralNetwork(AbstractNeuralNetworkClassifier):
     def prepare(self):
         n1, n2, n3 = self.layers
         W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n2, n2, 1]).astype(floatX), name='W2',
-                           broadcastable=[False, False, True])
+        W2 = theano.shared(value=self.random_state.normal(size=[n2, n2]).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
-            first = T.tanh(T.dot(W1, input))
-            second = first.reshape([n2, 1, input.shape[1]]) * first.reshape([1, n2, input.shape[1]])
-            return T.nnet.sigmoid(T.sum(W2 * second, axis=[0, 1]))
+            first = T.nnet.sigmoid(T.dot(W1, input))
+            return T.batched_dot(T.dot(W2, first).T, first.T)
+
+        return activation
+
+
+class ObliviousNeuralNetwork(AbstractNeuralNetworkClassifier):
+    """ Uses idea of oblivious trees,
+     but not strict cuts on features and not rectangular cuts
+    """
+    def prepare(self):
+        n1, n2, n3 = self.layers
+        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[2] * n2).astype(floatX), name='W2')
+        self.parameters = {'W1': W1, 'W2': W2}
+
+        def activation(input):
+            x = T.nnet.sigmoid(T.dot(W1, input))
+
+            first = T.transpose(T.stack(x, (1 - x)))
+            result = first[:, 0, :]
+            for axis in range(1, n2):
+                result = T.batched_tensordot(result, first[:, axis, :], axes=[[], []])
+
+            return T.tensordot(result, W2, axes=[range(1, n2 + 1), range(n2)])
 
         return activation
 
