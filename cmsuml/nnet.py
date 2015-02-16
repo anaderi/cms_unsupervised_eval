@@ -119,8 +119,9 @@ trainers = {'sgd': sgd_trainer, 'irprop-': irprop_minus_trainer, 'irprop+': irpr
 #endregion
 
 
-# TODO think of dropper and noises (and maybe something else)
-# TODO add random state
+# TODO think of dropper and noises
+# TODO think about case of vector output
+
 class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
     def __init__(self, layers=None, loss=log_loss, trainer='irprop-', trainer_parameters=None, random_state=None):
         """
@@ -155,7 +156,6 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         self.random_state = check_random_state(self.random_state)
         activation = self.prepare()
         loss_ = lambda x, y, w: self.loss(y, activation(x), w)
-        # TODO maybe use matrices here?
         x = T.matrix('X')
         y = T.vector('y')
         w = T.vector('w')
@@ -289,7 +289,7 @@ class PairwiseNeuralNetwork(AbstractNeuralNetworkClassifier):
 
         def activation(input):
             first = T.nnet.sigmoid(T.dot(W1, input))
-            return T.batched_dot(T.dot(W2, first).T, first.T)
+            return T.batched_dot(T.dot(W2, first).T, 1 - first.T)
 
         return activation
 
