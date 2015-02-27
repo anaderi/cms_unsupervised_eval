@@ -18,7 +18,7 @@ floatX = theano.config.floatX
 __author__ = 'Alex Rogozhnikov'
 
 
-#region Loss functions
+# region Loss functions
 
 def squared_loss(y, pred, w):
     return T.mean(w * (y - T.nnet.sigmoid(pred)) ** 2)
@@ -26,7 +26,7 @@ def squared_loss(y, pred, w):
 
 def log_loss(y, pred, w):
     margin = (1 - 2 * y) * pred
-    return T.mean(w * T.log(1 + T.exp(margin)))
+    return T.mean(w * T.nnet.softplus(margin))
 
 
 def ada_loss(y, pred, w):
@@ -39,6 +39,7 @@ def ada_loss(y, pred, w):
 # regression loss
 def mse_loss(y, pred, w):
     return T.mean(w * (y - pred) ** 2)
+
 
 #endregion
 
@@ -85,6 +86,7 @@ def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             prev_derivatives[name] = new_derivative
 
 
+# TODO check this IRPROP implementation
 def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
     """IRPROP+ trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.17.1332"""
@@ -99,7 +101,6 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             old_derivative = prev_derivatives[name]
             val = parameters[name].get_value()
             delta = deltas[name]
-            # TODO this is wrong IRPROP+ implementation
             if loss_value > prev_loss_value:
                 # step back
                 val += numpy.where(new_derivative * old_derivative < 0, delta * numpy.sign(old_derivative), 0)
@@ -111,8 +112,6 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             new_derivative[new_derivative * old_derivative < 0] = 0
             prev_derivatives[name] = new_derivative
         prev_loss_value = loss_value
-
-
 
 
 trainers = {'sgd': sgd_trainer, 'irprop-': irprop_minus_trainer, 'irprop+': irprop_plus_trainer}
@@ -215,7 +214,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         trainer = trainers[self.trainer if trainer is None else trainer]
         parameters_ = {} if self.trainer_parameters is None else self.trainer_parameters.copy()
         parameters_.update(trainer_parameters)
-        trainer(X, y, sample_weight, self.parameters, self.derivatives, self.Loss,  **parameters_)
+        trainer(X, y, sample_weight, self.parameters, self.derivatives, self.Loss, **parameters_)
         return self
 
 
@@ -223,6 +222,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
 
 class SimpleNeuralNetwork(AbstractNeuralNetworkClassifier):
     """The most simple NN with one hidden layer (sigmoid activation), for example purposes """
+
     def prepare(self):
         n1, n2, n3 = self.layers
         W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
@@ -232,15 +232,18 @@ class SimpleNeuralNetwork(AbstractNeuralNetworkClassifier):
         def activation(input):
             first = T.nnet.sigmoid(T.dot(W1, input))
             return T.dot(W2, first)
+
         return activation
 
 
 class MultiLayerNetwork(AbstractNeuralNetworkClassifier):
     """Supports arbitrary number of layers (sigmoid activation each)."""
+
     def prepare(self):
         activations = [lambda x: x]
         for i, layer in list(enumerate(self.layers))[1:]:
-            W = theano.shared(value=self.random_state.normal(size=[self.layers[i], self.layers[i-1]]), name='W' + str(i))
+            W = theano.shared(value=self.random_state.normal(size=[self.layers[i], self.layers[i - 1]]),
+                              name='W' + str(i))
             self.parameters[i] = W
             # j = i trick is to avoid lambda-capturing of i
             pred_activation = lambda x, j=i: T.dot(self.parameters[j], activations[j - 1](x))
@@ -250,11 +253,12 @@ class MultiLayerNetwork(AbstractNeuralNetworkClassifier):
 
 class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
     """One hidden layer with normalized RBF activation (Radial Basis Function)"""
+
     def prepare(self):
         n1, n2, n3 = self.layers
         W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
         W2 = theano.shared(value=self.random_state.normal(size=[n3, n2]).astype(floatX), name='W2')
-        G  = theano.shared(value=0.1, name='G')
+        G = theano.shared(value=0.1, name='G')
         self.parameters = {'W1': W1, 'W2': W2, 'G': G}
 
         def activation(input):
@@ -262,11 +266,13 @@ class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
             minkowski_distances = (abs(translation_vectors) ** 2).sum(2)
             first = T.nnet.softmax(- (0.001 + G * G) * minkowski_distances)
             return T.dot(W2, first)
+
         return activation
 
 
 class SoftmaxNeuralNetwork(AbstractNeuralNetworkClassifier):
     """One hidden layer, softmax activation function """
+
     def prepare(self):
         n1, n2, n3 = self.layers
         W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
@@ -276,15 +282,17 @@ class SoftmaxNeuralNetwork(AbstractNeuralNetworkClassifier):
         def activation(input):
             first = T.nnet.softmax(T.dot(W1, input))
             return T.dot(W2, first)
+
         return activation
 
 
 class PairwiseNeuralNetwork(AbstractNeuralNetworkClassifier):
-    """The result is computed as h = sigmoid(Ax), output = sum_{ij} B_ij h_i h_j """
+    """The result is computed as h = sigmoid(Ax), output = sum_{ij} B_ij h_i (1 - h_j) """
+
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n2, n2]).astype(floatX), name='W2')
+        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX) * 0.01, name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n2, n2]).astype(floatX) * 0.01, name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
@@ -294,10 +302,30 @@ class PairwiseNeuralNetwork(AbstractNeuralNetworkClassifier):
         return activation
 
 
+class PairwiseSoftplusNeuralNetwork(AbstractNeuralNetworkClassifier):
+    """The result is computed as h = sigmoid(Ax), output = sum_{ij} B_ij h_i (1 - h_j) """
+
+    def prepare(self):
+        n1, n2, n3 = self.layers
+        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX) * 0.01, name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n2, n2]).astype(floatX) * 0.01, name='W2')
+        self.parameters = {'W1': W1, 'W2': W2}
+
+        def activation(input):
+            z = T.dot(W1, input)
+            first1 = T.nnet.softplus(z)
+            first2 = T.nnet.softplus(-z)
+            return T.batched_dot(T.dot(W2, first1).T, first2.T)
+
+        return activation
+
+
 class ObliviousNeuralNetwork(AbstractNeuralNetworkClassifier):
     """ Uses idea of oblivious trees,
      but not strict cuts on features and not rectangular cuts
+     TODO: needs pretraining, like oblivious tree first
     """
+
     def prepare(self):
         n1, n2, n3 = self.layers
         W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
