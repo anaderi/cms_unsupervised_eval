@@ -55,22 +55,27 @@ def get_batch(xT, y, w, batch=10, random=numpy.random):
 
 
 def sgd_trainer(x, y, w, parameters, derivatives, loss,
-                stages=1000, batch=10, learning_rate=0.1, l2_penalty=0.001, random=numpy.random):
+                stages=1000, batch=10, learning_rate=0.1, l2_penalty=0.001, momentum=0.9,
+                random=numpy.random):
     """Simple gradient descent with backpropagation"""
+    momentums = {name: 0. for name in parameters}
+
     xT = x.T
     for stage in range(stages):
         xTp, yp, wp = get_batch(xT, y, w, batch=batch, random=random)
         for name in parameters:
             der = derivatives[name](xTp, yp, wp)
-            val = parameters[name].get_value() * (1. - learning_rate * l2_penalty) - learning_rate * der
+            momentums[name] *= momentum
+            momentums[name] = momentums[name] + der
+            val = parameters[name].get_value() * (1. - learning_rate * l2_penalty) - learning_rate * momentums[name]
             parameters[name].set_value(val)
 
 
 def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                          positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
     """ IRPROP- trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.21.3428 """
-    deltas = dict([(name, 1e-3 * numpy.ones_like(p)) for name, p in parameters.iteritems()])
-    prev_derivatives = dict([(name, numpy.zeros_like(p)) for name, p in parameters.iteritems()])
+    deltas = {name: 1e-3 for name, p in parameters.iteritems()}
+    prev_derivatives = {name: 0. for name, p in parameters.iteritems()}
     xT = x.T
     for _ in range(stages):
         for name in parameters:
@@ -86,12 +91,33 @@ def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             prev_derivatives[name] = new_derivative
 
 
+def irprop_star_trainer(x, y, w, parameters, derivatives, loss, stages=100,
+                        positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
+    """ IRPROP* trainer own modification """
+    deltas = {name: 1e-3 for name, p in parameters.iteritems()}
+    prev_derivatives = {name: 0. for name, p in parameters.iteritems()}
+    xT = x.T
+    for _ in range(stages):
+        for name in parameters:
+            new_derivative_ = derivatives[name](xT, y, w).flatten()
+            new_derivative = new_derivative_[:, numpy.newaxis] + new_derivative_[numpy.newaxis, :]
+            old_derivative = prev_derivatives[name]
+            delta = deltas[name]
+            delta = numpy.where(new_derivative * old_derivative > 0, delta * positive_step, delta * negative_step)
+            delta = numpy.clip(delta, min_step, max_step)
+            deltas[name] = delta
+            val = parameters[name].get_value()
+            parameters[name].set_value(val - (delta * numpy.sign(new_derivative)).sum(axis=1).reshape(val.shape))
+            new_derivative[new_derivative * old_derivative < 0] = 0
+            prev_derivatives[name] = new_derivative
+
+
 # TODO check this IRPROP implementation
 def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
     """IRPROP+ trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.17.1332"""
-    deltas = dict([(name, 1e-3 * numpy.ones_like(p)) for name, p in parameters.iteritems()])
-    prev_derivatives = dict([(name, numpy.zeros_like(p)) for name, p in parameters.iteritems()])
+    deltas = dict([(name, 1e-3) for name, p in parameters.iteritems()])
+    prev_derivatives = dict([(name, 0.) for name, p in parameters.iteritems()])
     prev_loss_value = 1e10
     xT = x.T
     for _ in range(stages):
@@ -114,7 +140,10 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
         prev_loss_value = loss_value
 
 
-trainers = {'sgd': sgd_trainer, 'irprop-': irprop_minus_trainer, 'irprop+': irprop_plus_trainer}
+trainers = {'sgd': sgd_trainer,
+            'irprop-': irprop_minus_trainer,
+            'irprop+': irprop_plus_trainer,
+            'irprop*': irprop_star_trainer, }
 #endregion
 
 

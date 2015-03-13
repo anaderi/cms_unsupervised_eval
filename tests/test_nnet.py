@@ -13,19 +13,25 @@ import numpy
 def test_nnet(n_samples=200, n_features=5, distance=0.5):
     from sklearn.datasets import make_blobs
     from sklearn.metrics import roc_auc_score
+
     X, y = make_blobs(n_samples=n_samples, n_features=5, centers=[numpy.ones(n_features) * distance,
                                                                   - numpy.ones(n_features) * distance])
-    for trainer in nnet.trainers:
-        for loss in [nnet.squared_loss, nnet.log_loss, nnet.ada_loss]:
-            for NNType in [
-                           # nnet.ObliviousNeuralNetwork,
-                           nnet.SimpleNeuralNetwork,
-                           nnet.MultiLayerNetwork,
-                           nnet.SoftmaxNeuralNetwork,
-                           nnet.RBFNeuralNetwork,
-                           nnet.PairwiseNeuralNetwork,
-                           nnet.PairwiseSoftplusNeuralNetwork,
-                          ]:
+
+    NNTypes = [
+        # nnet.ObliviousNeuralNetwork,
+        # nnet.SimpleNeuralNetwork,
+        nnet.MultiLayerNetwork,
+        nnet.SoftmaxNeuralNetwork,
+        nnet.RBFNeuralNetwork,
+        nnet.PairwiseNeuralNetwork,
+        nnet.PairwiseSoftplusNeuralNetwork,
+    ]
+
+    for loss in [nnet.squared_loss,
+                 nnet.log_loss,
+                 nnet.ada_loss]:
+        for NNType in NNTypes:
+            for trainer in nnet.trainers:
                 nn = NNType(layers=[n_features, 5, 1], loss=loss, trainer=trainer)
                 nn.fit(X, y, stages=100)
 
