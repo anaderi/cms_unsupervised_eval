@@ -17,6 +17,8 @@ from scipy.special import expit
 floatX = theano.config.floatX
 __author__ = 'Alex Rogozhnikov'
 
+# print every 1000000 stage, so the same as silent
+SILENT = 1000000
 
 # region Loss functions
 
@@ -25,7 +27,7 @@ def squared_loss(y, pred, w):
 
 
 def log_loss(y, pred, w):
-    margin = (1 - 2 * y) * pred
+    margin = pred * (1 - 2 * y)
     return T.mean(w * T.nnet.softplus(margin))
 
 
@@ -41,7 +43,7 @@ def mse_loss(y, pred, w):
     return T.mean(w * (y - pred) ** 2)
 
 
-#endregion
+# endregion
 
 
 #region Trainers
@@ -56,7 +58,7 @@ def get_batch(xT, y, w, batch=10, random=numpy.random):
 
 def sgd_trainer(x, y, w, parameters, derivatives, loss,
                 stages=1000, batch=10, learning_rate=0.1, l2_penalty=0.001, momentum=0.9,
-                random=numpy.random):
+                random=numpy.random, verbose=SILENT):
     """Simple gradient descent with backpropagation"""
     momentums = {name: 0. for name in parameters}
 
@@ -69,15 +71,18 @@ def sgd_trainer(x, y, w, parameters, derivatives, loss,
             momentums[name] = momentums[name] + der
             val = parameters[name].get_value() * (1. - learning_rate * l2_penalty) - learning_rate * momentums[name]
             parameters[name].set_value(val)
+        if (stage + 1) % verbose == 0:
+            print(loss(xT, y, w))
 
 
 def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
-                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
+                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
+                         random=numpy.random, verbose=SILENT):
     """ IRPROP- trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.21.3428 """
     deltas = {name: 1e-3 for name, p in parameters.iteritems()}
     prev_derivatives = {name: 0. for name, p in parameters.iteritems()}
     xT = x.T
-    for _ in range(stages):
+    for stage in range(stages):
         for name in parameters:
             new_derivative = derivatives[name](xT, y, w)
             old_derivative = prev_derivatives[name]
@@ -89,38 +94,49 @@ def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             parameters[name].set_value(val - delta * numpy.sign(new_derivative))
             new_derivative[new_derivative * old_derivative < 0] = 0
             prev_derivatives[name] = new_derivative
+        if (stage + 1) % verbose == 0:
+            print(loss(xT, y, w))
 
 
 def irprop_star_trainer(x, y, w, parameters, derivatives, loss, stages=100,
-                        positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
+                        positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
+                        random=numpy.random, verbose=SILENT):
     """ IRPROP* trainer own modification """
-    deltas = {name: 1e-3 for name, p in parameters.iteritems()}
-    prev_derivatives = {name: 0. for name, p in parameters.iteritems()}
+    from collections import defaultdict
+
+    deltas = defaultdict(lambda: 1e-3)
+    prev_derivatives = defaultdict(lambda: 0)
     xT = x.T
-    for _ in range(stages):
+    for stage in range(stages):
         for name in parameters:
             new_derivative_ = derivatives[name](xT, y, w).flatten()
-            new_derivative = new_derivative_[:, numpy.newaxis] + new_derivative_[numpy.newaxis, :]
-            old_derivative = prev_derivatives[name]
-            delta = deltas[name]
-            delta = numpy.where(new_derivative * old_derivative > 0, delta * positive_step, delta * negative_step)
-            delta = numpy.clip(delta, min_step, max_step)
-            deltas[name] = delta
-            val = parameters[name].get_value()
-            parameters[name].set_value(val - (delta * numpy.sign(new_derivative)).sum(axis=1).reshape(val.shape))
-            new_derivative[new_derivative * old_derivative < 0] = 0
-            prev_derivatives[name] = new_derivative
+            new_derivative_plus = new_derivative_[:, numpy.newaxis] + new_derivative_[numpy.newaxis, :]
+            new_derivative_minus = new_derivative_[:, numpy.newaxis] - new_derivative_[numpy.newaxis, :]
+            for i, new_derivative in enumerate([new_derivative_plus, new_derivative_minus]):
+                iname = '{}__{}'.format(i, name)
+                old_derivative = prev_derivatives[iname]
+                delta = deltas[iname]
+                delta = numpy.where(new_derivative * old_derivative > 0, delta * positive_step, delta * negative_step)
+                delta = numpy.clip(delta, min_step, max_step)
+                deltas[iname] = delta
+                val = parameters[name].get_value()
+                parameters[name].set_value(val - (delta * numpy.sign(new_derivative)).sum(axis=1).reshape(val.shape))
+                new_derivative[new_derivative * old_derivative < 0] = 0
+                prev_derivatives[iname] = new_derivative
+        if (stage + 1) % verbose == 0:
+            print(loss(xT, y, w))
 
 
 # TODO check this IRPROP implementation
 def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
-                        positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6, random=numpy.random):
+                        positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
+                        random=numpy.random, verbose=SILENT):
     """IRPROP+ trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.17.1332"""
     deltas = dict([(name, 1e-3) for name, p in parameters.iteritems()])
     prev_derivatives = dict([(name, 0.) for name, p in parameters.iteritems()])
     prev_loss_value = 1e10
     xT = x.T
-    for _ in range(stages):
+    for stage in range(stages):
         loss_value = loss(xT, y, w)
         for name in parameters:
             new_derivative = derivatives[name](xT, y, w)
@@ -138,6 +154,8 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             new_derivative[new_derivative * old_derivative < 0] = 0
             prev_derivatives[name] = new_derivative
         prev_loss_value = loss_value
+        if (stage + 1) % verbose == 0:
+            print(loss(xT, y, w))
 
 
 trainers = {'sgd': sgd_trainer,
