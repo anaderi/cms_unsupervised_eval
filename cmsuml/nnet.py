@@ -22,19 +22,20 @@ SILENT = 1000000
 
 # region Loss functions
 
+
 def squared_loss(y, pred, w):
-    return T.mean(w * (y - T.nnet.sigmoid(pred)) ** 2)
+    return T.mean(w * (y - T.nnet.sigmoid(pred.T)) ** 2)
 
 
 def log_loss(y, pred, w):
-    margin = pred * (1 - 2 * y)
+    margin = pred.T * (1 - 2 * y)
     return T.mean(w * T.nnet.softplus(margin))
 
 
 def ada_loss(y, pred, w):
     """important - ada loss should be used with nnets without sigmoid,
     output should be arbitrary real, not [0,1]"""
-    margin = pred * (1 - 2. * y)
+    margin = pred.T * (1 - 2. * y)
     return T.mean(w * T.exp(margin))
 
 
@@ -46,14 +47,14 @@ def mse_loss(y, pred, w):
 # endregion
 
 
-#region Trainers
-def get_batch(xT, y, w, batch=10, random=numpy.random):
+# region Trainers
+def get_batch(x, y, w, batch=10, random=numpy.random):
     """ Generates subset of training dataset, of size batch"""
     if len(y) > batch:
-        indices = random.choice(len(xT), size=batch)
-        return xT[:, indices], y[indices], w[indices]
+        indices = random.choice(len(x), size=batch)
+        return x[indices, :], y[indices], w[indices]
     else:
-        return xT, y, w
+        return x, y, w
 
 
 def sgd_trainer(x, y, w, parameters, derivatives, loss,
@@ -62,17 +63,16 @@ def sgd_trainer(x, y, w, parameters, derivatives, loss,
     """Simple gradient descent with backpropagation"""
     momentums = {name: 0. for name in parameters}
 
-    xT = x.T
     for stage in range(stages):
-        xTp, yp, wp = get_batch(xT, y, w, batch=batch, random=random)
+        xp, yp, wp = get_batch(x, y, w, batch=batch, random=random)
         for name in parameters:
-            der = derivatives[name](xTp, yp, wp)
+            der = derivatives[name](xp, yp, wp)
             momentums[name] *= momentum
-            momentums[name] = momentums[name] + der
+            momentums[name] += (1 - momentum) * der
             val = parameters[name].get_value() * (1. - learning_rate * l2_penalty) - learning_rate * momentums[name]
             parameters[name].set_value(val)
         if (stage + 1) % verbose == 0:
-            print(loss(xT, y, w))
+            print(loss(x, y, w))
 
 
 def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
@@ -81,10 +81,9 @@ def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
     """ IRPROP- trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.21.3428 """
     deltas = {name: 1e-3 for name, p in parameters.iteritems()}
     prev_derivatives = {name: 0. for name, p in parameters.iteritems()}
-    xT = x.T
     for stage in range(stages):
         for name in parameters:
-            new_derivative = derivatives[name](xT, y, w)
+            new_derivative = derivatives[name](x, y, w)
             old_derivative = prev_derivatives[name]
             delta = deltas[name]
             delta = numpy.where(new_derivative * old_derivative > 0, delta * positive_step, delta * negative_step)
@@ -94,22 +93,22 @@ def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             parameters[name].set_value(val - delta * numpy.sign(new_derivative))
             new_derivative[new_derivative * old_derivative < 0] = 0
             prev_derivatives[name] = new_derivative
+
         if (stage + 1) % verbose == 0:
-            print(loss(xT, y, w))
+            print(loss(x, y, w))
 
 
 def irprop_star_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
                         random=numpy.random, verbose=SILENT):
-    """ IRPROP* trainer own modification """
+    """ IRPROP* trainer (own modification, not recommended) """
     from collections import defaultdict
 
     deltas = defaultdict(lambda: 1e-3)
     prev_derivatives = defaultdict(lambda: 0)
-    xT = x.T
     for stage in range(stages):
         for name in parameters:
-            new_derivative_ = derivatives[name](xT, y, w).flatten()
+            new_derivative_ = derivatives[name](x, y, w).flatten()
             new_derivative_plus = new_derivative_[:, numpy.newaxis] + new_derivative_[numpy.newaxis, :]
             new_derivative_minus = new_derivative_[:, numpy.newaxis] - new_derivative_[numpy.newaxis, :]
             for i, new_derivative in enumerate([new_derivative_plus, new_derivative_minus]):
@@ -124,7 +123,7 @@ def irprop_star_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                 new_derivative[new_derivative * old_derivative < 0] = 0
                 prev_derivatives[iname] = new_derivative
         if (stage + 1) % verbose == 0:
-            print(loss(xT, y, w))
+            print(loss(x, y, w))
 
 
 # TODO check this IRPROP implementation
@@ -135,11 +134,10 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
     deltas = dict([(name, 1e-3) for name, p in parameters.iteritems()])
     prev_derivatives = dict([(name, 0.) for name, p in parameters.iteritems()])
     prev_loss_value = 1e10
-    xT = x.T
     for stage in range(stages):
-        loss_value = loss(xT, y, w)
+        loss_value = loss(x, y, w)
         for name in parameters:
-            new_derivative = derivatives[name](xT, y, w)
+            new_derivative = derivatives[name](x, y, w)
             old_derivative = prev_derivatives[name]
             val = parameters[name].get_value()
             delta = deltas[name]
@@ -155,14 +153,40 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             prev_derivatives[name] = new_derivative
         prev_loss_value = loss_value
         if (stage + 1) % verbose == 0:
-            print(loss(xT, y, w))
+            print(loss(x, y, w))
+
+
+def adadelta_trainer(x, y, w, parameters, derivatives, loss, stages=1000, decay_rate=0.95,
+                     epsilon=0.01, learning_rate=1., batch=1000, random=numpy.random, verbose=SILENT):
+    cumulative_derivatives = {name: 0. for name, p in parameters.iteritems()}
+    cumulative_steps = {name: 1e-6 for name, p in parameters.iteritems()}
+
+    for stage in range(stages):
+        xp, yp, wp = get_batch(x, y, w, batch=batch, random=random)
+        for name in parameters:
+            derivative = derivatives[name](xp, yp, wp)
+            cumulative_derivatives[name] *= decay_rate
+            cumulative_derivatives[name] += (1 - decay_rate) * derivative ** 2
+
+            step = - numpy.sqrt(
+                (cumulative_steps[name] + epsilon) / (cumulative_derivatives[name] + epsilon)) * derivative
+            cumulative_steps[name] *= decay_rate
+            cumulative_steps[name] += (1 - decay_rate) * step ** 2
+
+            val = parameters[name].get_value()
+            parameters[name].set_value(val + learning_rate * step)
+
+        if (stage + 1) % verbose == 0:
+            print(loss(x, y, w))
 
 
 trainers = {'sgd': sgd_trainer,
             'irprop-': irprop_minus_trainer,
             'irprop+': irprop_plus_trainer,
-            'irprop*': irprop_star_trainer, }
-#endregion
+            'irprop*': irprop_star_trainer,
+            'adadelta': adadelta_trainer,
+}
+# endregion
 
 
 # TODO think of dropper and noises
@@ -205,7 +229,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         x = T.matrix('X')
         y = T.vector('y')
         w = T.vector('w')
-        self.Activation = theano.function([x], activation(x))
+        self.Activation = theano.function([x], activation(x).flatten())
         self.Loss = theano.function([x, y, w], loss_(x, y, w))
         for name, param in self.parameters.iteritems():
             self.derivatives[name] = theano.function([x, y, w], T.grad(loss_(x, y, w), param))
@@ -213,7 +237,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
     def activate(self, X):
         """ Activates NN on particular dataset
         :param numpy.array X: of shape [n_samples, n_features] """
-        return self.Activation(numpy.transpose(X))
+        return self.Activation(X)
 
     def predict_proba(self, X):
         """Computes praobability of each event to belong to a particular class
@@ -221,7 +245,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         :return: numpy.array of shape [n_samples, n_classes]
         """
         result = numpy.zeros([len(X), 2])
-        result[:, 1] = expit(self.Activation(X.transpose()))
+        result[:, 1] = expit(self.Activation(X))
         result[:, 0] = 1 - result[:, 1]
         return result
 
@@ -241,7 +265,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         :return float, the loss vales computed"""
         sample_weight = utils.check_sample_weight(y, sample_weight=sample_weight)
         sample_weight /= numpy.mean(sample_weight)
-        return self.Loss(X.transpose(), y, sample_weight)
+        return self.Loss(X, y, sample_weight)
 
     def fit(self, X, y, sample_weight=None, trainer=None, **trainer_parameters):
         """ Prepare the model by optimizing selected loss function with some trainer.
@@ -265,20 +289,20 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         return self
 
 
-#region Neural networks
+# region Neural networks
 
 class SimpleNeuralNetwork(AbstractNeuralNetworkClassifier):
     """The most simple NN with one hidden layer (sigmoid activation), for example purposes """
 
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n3, n2]).astype(floatX), name='W2')
+        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n2, n3]).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
-            first = T.nnet.sigmoid(T.dot(W1, input))
-            return T.dot(W2, first)
+            first = T.nnet.sigmoid(T.dot(input, W1))
+            return T.dot(first, W2)
 
         return activation
 
@@ -289,12 +313,12 @@ class MultiLayerNetwork(AbstractNeuralNetworkClassifier):
     def prepare(self):
         activations = [lambda x: x]
         for i, layer in list(enumerate(self.layers))[1:]:
-            W = theano.shared(value=self.random_state.normal(size=[self.layers[i], self.layers[i - 1]]),
+            W = theano.shared(value=self.random_state.normal(size=[self.layers[i - 1], self.layers[i]]),
                               name='W' + str(i))
             self.parameters[i] = W
             # j = i trick is to avoid lambda-capturing of i
-            pred_activation = lambda x, j=i: T.dot(self.parameters[j], activations[j - 1](x))
-            activations.append(lambda x, j=i: T.nnet.sigmoid(pred_activation(x, j)))
+            pred_activation = lambda x, j=i: T.dot(activations[j - 1](x), self.parameters[j])
+            activations.append(lambda x, j=i: T.tanh(pred_activation(x, j)))
         return pred_activation
 
 
@@ -303,16 +327,16 @@ class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
 
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n3, n2]).astype(floatX), name='W2')
+        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n2, n3]).astype(floatX), name='W2')
         G = theano.shared(value=0.1, name='G')
         self.parameters = {'W1': W1, 'W2': W2, 'G': G}
 
         def activation(input):
-            translation_vectors = W1.reshape((W1.shape[0], 1, -1)) - input.transpose().reshape((1, input.shape[1], -1))
+            translation_vectors = W1.reshape((1, W1.shape[0], -1)) - input.reshape((input.shape[0], 1, -1))
             minkowski_distances = (abs(translation_vectors) ** 2).sum(2)
             first = T.nnet.softmax(- (0.001 + G * G) * minkowski_distances)
-            return T.dot(W2, first)
+            return T.dot(first, W2)
 
         return activation
 
@@ -322,13 +346,13 @@ class SoftmaxNeuralNetwork(AbstractNeuralNetworkClassifier):
 
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n3, n2]).astype(floatX), name='W2')
+        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
+        W2 = theano.shared(value=self.random_state.normal(size=[n2, n3]).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
-            first = T.nnet.softmax(T.dot(W1, input))
-            return T.dot(W2, first)
+            first = T.nnet.softmax(T.dot(input, W1))
+            return T.dot(first, W2)
 
         return activation
 
@@ -338,13 +362,13 @@ class PairwiseNeuralNetwork(AbstractNeuralNetworkClassifier):
 
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX) * 0.01, name='W1')
+        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX) * 0.01, name='W1')
         W2 = theano.shared(value=self.random_state.normal(size=[n2, n2]).astype(floatX) * 0.01, name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
-            first = T.nnet.sigmoid(T.dot(W1, input))
-            return T.batched_dot(T.dot(W2, first).T, 1 - first.T)
+            first = T.nnet.sigmoid(T.dot(input, W1))
+            return T.batched_dot(T.dot(first, W2), 1 - first)
 
         return activation
 
@@ -354,42 +378,41 @@ class PairwiseSoftplusNeuralNetwork(AbstractNeuralNetworkClassifier):
 
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX) * 0.01, name='W1')
+        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX) * 0.01, name='W1')
         W2 = theano.shared(value=self.random_state.normal(size=[n2, n2]).astype(floatX) * 0.01, name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
-            z = T.dot(W1, input)
+            z = T.dot(input, W1)
             first1 = T.nnet.softplus(z)
             first2 = T.nnet.softplus(-z)
-            return T.batched_dot(T.dot(W2, first1).T, first2.T)
+            return T.batched_dot(T.dot(first1, W2), first2)
 
         return activation
 
 
 class ObliviousNeuralNetwork(AbstractNeuralNetworkClassifier):
     """ Uses idea of oblivious trees,
-     but not strict cuts on features and not rectangular cuts
+     but not strict cuts on features and not rectangular cuts, but linear conditions
      TODO: needs pretraining, like oblivious tree first
     """
 
     def prepare(self):
         n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n2, n1]).astype(floatX), name='W1')
+        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
         W2 = theano.shared(value=self.random_state.normal(size=[2] * n2).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
 
         def activation(input):
-            x = T.nnet.sigmoid(T.dot(W1, input))
-
-            first = T.transpose(T.stack(x, (1 - x)))
-            result = first[:, 0, :]
+            x = T.nnet.sigmoid(T.dot(input, W1))
+            first = T.stack(x, (1 - x))
+            result = first[:, :, 0]
             for axis in range(1, n2):
-                result = T.batched_tensordot(result, first[:, axis, :], axes=[[], []])
+                result = T.batched_tensordot(result, first[:, :, axis], axes=[[], []])
 
             return T.tensordot(result, W2, axes=[range(1, n2 + 1), range(n2)])
 
         return activation
 
-#endregion
+# endregion
 
