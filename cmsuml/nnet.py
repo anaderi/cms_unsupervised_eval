@@ -24,18 +24,18 @@ SILENT = 1000000
 
 
 def squared_loss(y, pred, w):
-    return T.mean(w * (y - T.nnet.sigmoid(pred.T)) ** 2)
+    return T.mean(w * (y - T.nnet.sigmoid(pred)) ** 2)
 
 
 def log_loss(y, pred, w):
-    margin = pred.T * (1 - 2 * y)
+    margin = pred * (1 - 2 * y)
     return T.mean(w * T.nnet.softplus(margin))
 
 
 def ada_loss(y, pred, w):
     """important - ada loss should be used with nnets without sigmoid,
     output should be arbitrary real, not [0,1]"""
-    margin = pred.T * (1 - 2. * y)
+    margin = pred * (1 - 2 * y)
     return T.mean(w * T.exp(margin))
 
 
@@ -79,8 +79,8 @@ def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                          positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
                          random=numpy.random, verbose=SILENT):
     """ IRPROP- trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.21.3428 """
-    deltas = {name: 1e-3 for name, p in parameters.iteritems()}
-    prev_derivatives = {name: 0. for name, p in parameters.iteritems()}
+    deltas = {name: 1e-3 for name in parameters}
+    prev_derivatives = {name: 0. for name in parameters}
     for stage in range(stages):
         for name in parameters:
             new_derivative = derivatives[name](x, y, w)
@@ -131,8 +131,8 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
                         random=numpy.random, verbose=SILENT):
     """IRPROP+ trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.17.1332"""
-    deltas = dict([(name, 1e-3) for name, p in parameters.iteritems()])
-    prev_derivatives = dict([(name, 0.) for name, p in parameters.iteritems()])
+    deltas = dict([(name, 1e-3) for name in parameters])
+    prev_derivatives = dict([(name, 0.) for name in parameters])
     prev_loss_value = 1e10
     for stage in range(stages):
         loss_value = loss(x, y, w)
@@ -157,9 +157,9 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
 
 
 def adadelta_trainer(x, y, w, parameters, derivatives, loss, stages=1000, decay_rate=0.95,
-                     epsilon=0.01, learning_rate=1., batch=1000, random=numpy.random, verbose=SILENT):
-    cumulative_derivatives = {name: 0. for name, p in parameters.iteritems()}
-    cumulative_steps = {name: 1e-6 for name, p in parameters.iteritems()}
+                     epsilon=1e-5, learning_rate=1., batch=1000, random=numpy.random, verbose=SILENT):
+    cumulative_derivatives = {name: epsilon for name in parameters}
+    cumulative_steps = {name: epsilon for name in parameters}
 
     for stage in range(stages):
         xp, yp, wp = get_batch(x, y, w, batch=batch, random=random)
@@ -215,8 +215,8 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
 
     def prepare(self):
         """This method should provide activation function and set parameters
-        :return Activation function, f: X.T -> p,
-        X.T of shape [n_features, n_events], p of shape [n_events, n_outputs]
+        :return Activation function, f: X -> p,
+        X of shape [n_events, n_outputs], p of shape [n_events, n_outputs]
         """
         raise NotImplementedError()
 
@@ -225,7 +225,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         and initializes the weights"""
         self.random_state = check_random_state(self.random_state)
         activation = self.prepare()
-        loss_ = lambda x, y, w: self.loss(y, activation(x), w)
+        loss_ = lambda x, y, w: self.loss(y, activation(x).flatten(), w)
         x = T.matrix('X')
         y = T.vector('y')
         w = T.vector('w')
@@ -329,6 +329,7 @@ class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
         n1, n2, n3 = self.layers
         W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
         W2 = theano.shared(value=self.random_state.normal(size=[n2, n3]).astype(floatX), name='W2')
+        # this parameter is responsible for scaling, it is computed as well
         G = theano.shared(value=0.1, name='G')
         self.parameters = {'W1': W1, 'W2': W2, 'G': G}
 
@@ -405,7 +406,7 @@ class ObliviousNeuralNetwork(AbstractNeuralNetworkClassifier):
 
         def activation(input):
             x = T.nnet.sigmoid(T.dot(input, W1))
-            first = T.stack(x, (1 - x))
+            first = T.swapaxes(T.stack(x, (1 - x)), 0, 1)
             result = first[:, :, 0]
             for axis in range(1, n2):
                 result = T.batched_tensordot(result, first[:, :, axis], axes=[[], []])
