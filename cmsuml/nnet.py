@@ -3,11 +3,12 @@ Minimalistic version of feed-forward neural networks on theano.
 The neural networks from this library provide sklearn classifier's interface.
 """
 from __future__ import print_function, division
+from copy import deepcopy
 
 import numpy
 import theano
 import theano.tensor as T
-from sklearn.utils.validation import check_random_state
+from sklearn.utils.validation import check_random_state, check_arrays
 from sklearn.base import BaseEstimator, ClassifierMixin
 
 from . import utils
@@ -24,31 +25,43 @@ SILENT = 1000000
 
 
 def squared_loss(y, pred, w):
+    """ Squared loss for classification, not to be messed up with MSE"""
     return T.mean(w * (y - T.nnet.sigmoid(pred)) ** 2)
 
 
 def log_loss(y, pred, w):
+    """ Logistic loss (aka cross-entropy, aka binomial deviance) """
     margin = pred * (1 - 2 * y)
     return T.mean(w * T.nnet.softplus(margin))
 
 
-def ada_loss(y, pred, w):
-    """important - ada loss should be used with nnets without sigmoid,
-    output should be arbitrary real, not [0,1]"""
+def exp_loss(y, pred, w):
+    """Exponential loss (aka AdaLoss function) """
     margin = pred * (1 - 2 * y)
     return T.mean(w * T.exp(margin))
+
+
+def exp_log_loss(y, pred, w):
+    """ Combines logistic loss for signal and exponential loss for background """
+    return 2 * log_loss(y, pred, w=w * y) + exp_loss(y, pred, w=w * (1 - y))
 
 
 # regression loss
 def mse_loss(y, pred, w):
     return T.mean(w * (y - pred) ** 2)
 
+losses = {'mse_loss': mse_loss,
+          'exp_loss': exp_loss,
+          'log_loss': log_loss,
+          'squared_loss': squared_loss,
+          'exp_log_loss': exp_log_loss,
+          }
 
 # endregion
 
 
 # region Trainers
-def get_batch(x, y, w, batch=10, random=numpy.random):
+def get_batch(x, y, w, random, batch=10):
     """ Generates subset of training dataset, of size batch"""
     if len(y) > batch:
         indices = random.choice(len(x), size=batch)
@@ -59,8 +72,9 @@ def get_batch(x, y, w, batch=10, random=numpy.random):
 
 def sgd_trainer(x, y, w, parameters, derivatives, loss,
                 stages=1000, batch=10, learning_rate=0.1, l2_penalty=0.001, momentum=0.9,
-                random=numpy.random, verbose=SILENT):
+                random=0, verbose=SILENT):
     """Simple gradient descent with backpropagation"""
+    random = check_random_state(random)
     momentums = {name: 0. for name in parameters}
 
     for stage in range(stages):
@@ -75,9 +89,9 @@ def sgd_trainer(x, y, w, parameters, derivatives, loss,
             print(loss(x, y, w))
 
 
-def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
-                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
-                         random=numpy.random, verbose=SILENT):
+def irprop_minus_trainer(x, y, w, parameters, derivatives, loss,
+                         stages=100, positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
+                         random=0, verbose=SILENT):
     """ IRPROP- trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.21.3428 """
     deltas = {name: 1e-3 for name in parameters}
     prev_derivatives = {name: 0. for name in parameters}
@@ -100,8 +114,8 @@ def irprop_minus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
 
 def irprop_star_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
-                        random=numpy.random, verbose=SILENT):
-    """ IRPROP* trainer (own modification, not recommended) """
+                        random=0, verbose=SILENT):
+    """ IRPROP* trainer (own modification, not recommended for usage) """
     from collections import defaultdict
 
     deltas = defaultdict(lambda: 1e-3)
@@ -126,10 +140,9 @@ def irprop_star_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             print(loss(x, y, w))
 
 
-# TODO check this IRPROP implementation
 def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
                         positive_step=1.2, negative_step=0.5, max_step=1., min_step=1e-6,
-                        random=numpy.random, verbose=SILENT):
+                        random=0, verbose=SILENT):
     """IRPROP+ trainer, see http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.17.1332"""
     deltas = dict([(name, 1e-3) for name in parameters])
     prev_derivatives = dict([(name, 0.) for name in parameters])
@@ -142,7 +155,7 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
             val = parameters[name].get_value()
             delta = deltas[name]
             if loss_value > prev_loss_value:
-                # step back
+                # step back on those variables where sign was changed
                 val += numpy.where(new_derivative * old_derivative < 0, delta * numpy.sign(old_derivative), 0)
             delta = numpy.where(new_derivative * old_derivative > 0, delta * positive_step, delta * negative_step)
             delta = numpy.clip(delta, min_step, max_step)
@@ -157,7 +170,8 @@ def irprop_plus_trainer(x, y, w, parameters, derivatives, loss, stages=100,
 
 
 def adadelta_trainer(x, y, w, parameters, derivatives, loss, stages=1000, decay_rate=0.95,
-                     epsilon=1e-5, learning_rate=1., batch=1000, random=numpy.random, verbose=SILENT):
+                     epsilon=1e-5, learning_rate=1., batch=1000, random=0, verbose=SILENT):
+    random = check_random_state(random)
     cumulative_derivatives = {name: epsilon for name in parameters}
     cumulative_steps = {name: epsilon for name in parameters}
 
@@ -185,20 +199,29 @@ trainers = {'sgd': sgd_trainer,
             'irprop+': irprop_plus_trainer,
             'irprop*': irprop_star_trainer,
             'adadelta': adadelta_trainer,
-}
+            }
 # endregion
 
 
 # TODO think of dropper and noises
-# TODO think about case of vector output
+
+def normalize_weight(y, sample_weight):
+    """ guarantees that sample weight is numpy.array of shape [n_samples],
+    moreover normalizes it """
+    sample_weight = utils.check_sample_weight(y, sample_weight=sample_weight)
+    sample_weight /= numpy.mean(sample_weight)
+    return sample_weight
+
 
 class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
     def __init__(self, layers=None, loss=log_loss, trainer='irprop-', trainer_parameters=None, random_state=None):
         """
         Constructs the neural network based on Theano (for classification purposes).
+        Supports only binary classification, supports weights, which makes it usable in boosting.
+
         Works in sklearn fit-predict way: X is [n_samples, n_features], y is [n_samples], sample_weight is [n_samples].
         Works as usual sklearn classifier, can be used in boosting, for instance, pickled, etc.
-        :param layers: list of int, e.g [14, 7, 1] - the number of units in each layer
+        :param layers: list of int, e.g [9, 7] - the number of units in each *hidden* layer
         :param loss: loss function used (log_loss by default)
         :param trainer: string, describes the method
         :param trainer_parameters: parameters passed to trainer function (learning_rate, etc., trainer-specific).
@@ -209,38 +232,51 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         self.parameters = {}
         self.derivatives = {}
         self.trainer = trainer
-        self.trainer_parameters = trainer_parameters
+        self.trainer_parameters = deepcopy(trainer_parameters)
         self.random_state = random_state
-        self.classes_ = numpy.array([0, 1])  # Dirty hack for AdaBoost
+        self.classes_ = numpy.array([0, 1])
+
+    def _create_shared_matrix(self, name, n1, n2):
+        """Creates a parameter of neural network, which is typically a matrix """
+        matrix = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX) * 0.01, name=name)
+        self.parameters[name] = matrix
+        return matrix
 
     def prepare(self):
         """This method should provide activation function and set parameters
         :return Activation function, f: X -> p,
-        X of shape [n_events, n_outputs], p of shape [n_events, n_outputs]
+        X of shape [n_events, n_outputs], p of shape [n_events].
+        For classification, p is arbitrary real, the greater p, the more event
+        looks like signal event (label 1).
         """
         raise NotImplementedError()
 
-    def _prepare(self):
+    def _prepare(self, n_input_features):
         """This function is called once, it creates the activation function, it's gradient
         and initializes the weights"""
         self.random_state = check_random_state(self.random_state)
-        activation = self.prepare()
-        loss_ = lambda x, y, w: self.loss(y, activation(x).flatten(), w)
+        self.layers_ = [n_input_features] + self.layers + [1]
+        self.parameters = {}
+        activation_raw = self.prepare()
+        activation = lambda x: activation_raw(x).flatten()
+        loss_function = losses.get(self.loss, self.loss)
+        loss_ = lambda x, y, w: loss_function(y, activation(x), w)
         x = T.matrix('X')
         y = T.vector('y')
         w = T.vector('w')
-        self.Activation = theano.function([x], activation(x).flatten())
+        self.Activation = theano.function([x], activation(x))
         self.Loss = theano.function([x, y, w], loss_(x, y, w))
         for name, param in self.parameters.iteritems():
             self.derivatives[name] = theano.function([x, y, w], T.grad(loss_(x, y, w), param))
 
     def activate(self, X):
         """ Activates NN on particular dataset
-        :param numpy.array X: of shape [n_samples, n_features] """
+        :param numpy.array X: of shape [n_samples, n_features]
+        :return: numpy.array with results of shape [n_samples] """
         return self.Activation(X)
 
     def predict_proba(self, X):
-        """Computes praobability of each event to belong to a particular class
+        """Computes probability of each event to belong to a particular class
         :param numpy.array X: of shape [n_samples, n_features]
         :return: numpy.array of shape [n_samples, n_classes]
         """
@@ -263,8 +299,7 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         :param sample_weight: optional, numpy.array of shape [n_samples],
             weights are normalized (so that 'mean' == 1).
         :return float, the loss vales computed"""
-        sample_weight = utils.check_sample_weight(y, sample_weight=sample_weight)
-        sample_weight /= numpy.mean(sample_weight)
+        sample_weight = normalize_weight(y, sample_weight)
         return self.Loss(X, y, sample_weight)
 
     def fit(self, X, y, sample_weight=None, trainer=None, **trainer_parameters):
@@ -276,11 +311,13 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         :param trainer: str, method used to minimize loss, overrides one in the ctor
         :param trainer_parameters: parameters for this method, override ones in ctor
         :return: self """
+        X, y, sample_weight = check_arrays(X, y, sample_weight)
+        self.classes_ = numpy.array([0, 1])
+        assert (numpy.unique(y) == self.classes_).all(), 'only two-class classification supported, labels are 0 and 1'
         if not self.prepared:
-            self._prepare()
+            self._prepare(X.shape[1])
             self.prepared = True
-        sample_weight = utils.check_sample_weight(y, sample_weight=sample_weight)
-        sample_weight /= numpy.mean(sample_weight)
+        sample_weight = normalize_weight(y, sample_weight)
 
         trainer = trainers[self.trainer if trainer is None else trainer]
         parameters_ = {} if self.trainer_parameters is None else self.trainer_parameters.copy()
@@ -295,10 +332,9 @@ class SimpleNeuralNetwork(AbstractNeuralNetworkClassifier):
     """The most simple NN with one hidden layer (sigmoid activation), for example purposes """
 
     def prepare(self):
-        n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n2, n3]).astype(floatX), name='W2')
-        self.parameters = {'W1': W1, 'W2': W2}
+        n1, n2, n3 = self.layers_
+        W1 = self._create_shared_matrix('W1', n1, n2)
+        W2 = self._create_shared_matrix('W2', n2, n3)
 
         def activation(input):
             first = T.nnet.sigmoid(T.dot(input, W1))
@@ -308,30 +344,27 @@ class SimpleNeuralNetwork(AbstractNeuralNetworkClassifier):
 
 
 class MultiLayerNetwork(AbstractNeuralNetworkClassifier):
-    """Supports arbitrary number of layers (sigmoid activation each)."""
+    """Supports arbitrary number of layers (sigmoid activation each).
+    aka MLP (MultiLayerPerceptron)"""
 
     def prepare(self):
-        activations = [lambda x: x]
-        for i, layer in list(enumerate(self.layers))[1:]:
-            W = theano.shared(value=self.random_state.normal(size=[self.layers[i - 1], self.layers[i]]),
-                              name='W' + str(i))
-            self.parameters[i] = W
-            # j = i trick is to avoid lambda-capturing of i
-            pred_activation = lambda x, j=i: T.dot(activations[j - 1](x), self.parameters[j])
-            activations.append(lambda x, j=i: T.tanh(pred_activation(x, j)))
-        return pred_activation
+        activation = lambda x: x
+        for i, layer in list(enumerate(self.layers_))[1:]:
+            W = self._create_shared_matrix('W' + str(i), self.layers_[i - 1], self.layers_[i])
+            # act=activation and W_=W are tricks to avoid lambda-capturing
+            activation = lambda x, act=activation, W_=W: T.tanh(T.dot(act(x), W_))
+        return activation
 
 
 class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
     """One hidden layer with normalized RBF activation (Radial Basis Function)"""
-
     def prepare(self):
-        n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n2, n3]).astype(floatX), name='W2')
+        n1, n2, n3 = self.layers_
+        W1 = self._create_shared_matrix('W1', n1, n2)
+        W2 = self._create_shared_matrix('W2', n2, n3)
         # this parameter is responsible for scaling, it is computed as well
         G = theano.shared(value=0.1, name='G')
-        self.parameters = {'W1': W1, 'W2': W2, 'G': G}
+        self.parameters['G'] = G
 
         def activation(input):
             translation_vectors = W1.reshape((1, W1.shape[0], -1)) - input.reshape((input.shape[0], 1, -1))
@@ -346,10 +379,9 @@ class SoftmaxNeuralNetwork(AbstractNeuralNetworkClassifier):
     """One hidden layer, softmax activation function """
 
     def prepare(self):
-        n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n2, n3]).astype(floatX), name='W2')
-        self.parameters = {'W1': W1, 'W2': W2}
+        n1, n2, n3 = self.layers_
+        W1 = self._create_shared_matrix('W1', n1, n2)
+        W2 = self._create_shared_matrix('W2', n2, n3)
 
         def activation(input):
             first = T.nnet.softmax(T.dot(input, W1))
@@ -362,10 +394,9 @@ class PairwiseNeuralNetwork(AbstractNeuralNetworkClassifier):
     """The result is computed as h = sigmoid(Ax), output = sum_{ij} B_ij h_i (1 - h_j) """
 
     def prepare(self):
-        n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX) * 0.01, name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n2, n2]).astype(floatX) * 0.01, name='W2')
-        self.parameters = {'W1': W1, 'W2': W2}
+        n1, n2, n3 = self.layers_
+        W1 = self._create_shared_matrix('W1', n1, n2)
+        W2 = self._create_shared_matrix('W2', n2, n2)
 
         def activation(input):
             first = T.nnet.sigmoid(T.dot(input, W1))
@@ -378,10 +409,9 @@ class PairwiseSoftplusNeuralNetwork(AbstractNeuralNetworkClassifier):
     """The result is computed as h = sigmoid(Ax), output = sum_{ij} B_ij h_i (1 - h_j) """
 
     def prepare(self):
-        n1, n2, n3 = self.layers
-        W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX) * 0.01, name='W1')
-        W2 = theano.shared(value=self.random_state.normal(size=[n2, n2]).astype(floatX) * 0.01, name='W2')
-        self.parameters = {'W1': W1, 'W2': W2}
+        n1, n2, n3 = self.layers_
+        W1 = self._create_shared_matrix('W1', n1, n2)
+        W2 = self._create_shared_matrix('W2', n2, n2)
 
         def activation(input):
             z = T.dot(input, W1)
@@ -395,11 +425,10 @@ class PairwiseSoftplusNeuralNetwork(AbstractNeuralNetworkClassifier):
 class ObliviousNeuralNetwork(AbstractNeuralNetworkClassifier):
     """ Uses idea of oblivious trees,
      but not strict cuts on features and not rectangular cuts, but linear conditions
-     TODO: needs pretraining, like oblivious tree first
-    """
-
+     """
+    # TODO: needs pretraining, like oblivious tree first
     def prepare(self):
-        n1, n2, n3 = self.layers
+        n1, n2, n3 = self.layers_
         W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
         W2 = theano.shared(value=self.random_state.normal(size=[2] * n2).astype(floatX), name='W2')
         self.parameters = {'W1': W1, 'W2': W2}
