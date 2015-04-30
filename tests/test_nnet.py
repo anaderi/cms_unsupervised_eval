@@ -38,16 +38,17 @@ def test_nnet(n_samples=200, n_features=5, distance=0.5):
     assert 0 == 1
 
 
-test_nnet()
-
 
 def test_oblivious(n_samples=200, n_features=5, distance=0.5):
     # Since oblivious NN is very slow, it is tested separately
-    nn = nnet.ObliviousNeuralNetwork(layers=[n_features, 3, 1], trainer='irprop-')
-    X, y = make_blobs(n_samples=n_samples, n_features=5, centers=[numpy.ones(n_features) * distance,
-                                                                  - numpy.ones(n_features) * distance])
+    nn = nnet.ObliviousNeuralNetwork(layers=[3], trainer='irprop-')
+    X, y = make_blobs(n_samples=n_samples, n_features=5,
+                      centers=[numpy.ones(n_features) * distance, - numpy.ones(n_features) * distance])
     nn.fit(X, y, batch=100, verbose=10)
     print(roc_auc_score(y, nn.predict_proba(X)[:, 1]), nn)
 
+
+test_oblivious()
+test_nnet()
 
 

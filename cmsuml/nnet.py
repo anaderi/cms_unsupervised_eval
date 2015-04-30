@@ -204,6 +204,9 @@ trainers = {'sgd': sgd_trainer,
 
 
 # TODO think of dropper and noises
+# TODO add scaler
+# TODO yield system
+
 
 def normalize_weight(y, sample_weight):
     """ guarantees that sample weight is numpy.array of shape [n_samples],
@@ -214,7 +217,7 @@ def normalize_weight(y, sample_weight):
 
 
 class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
-    def __init__(self, layers=None, loss=log_loss, trainer='irprop-', trainer_parameters=None, random_state=None):
+    def __init__(self, layers=None, loss='log_loss', trainer='irprop-', trainer_parameters=None, random_state=None):
         """
         Constructs the neural network based on Theano (for classification purposes).
         Supports only binary classification, supports weights, which makes it usable in boosting.
@@ -222,9 +225,9 @@ class AbstractNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
         Works in sklearn fit-predict way: X is [n_samples, n_features], y is [n_samples], sample_weight is [n_samples].
         Works as usual sklearn classifier, can be used in boosting, for instance, pickled, etc.
         :param layers: list of int, e.g [9, 7] - the number of units in each *hidden* layer
-        :param loss: loss function used (log_loss by default)
-        :param trainer: string, describes the method
-        :param trainer_parameters: parameters passed to trainer function (learning_rate, etc., trainer-specific).
+        :param loss: loss function used (log_loss by default), str ot function(y, pred, w) -> float
+        :param trainer: string, name of optimization method used
+        :param dict trainer_parameters: parameters passed to trainer function (learning_rate, etc., trainer-specific).
         """
         self.layers = layers
         self.loss = loss
@@ -362,7 +365,7 @@ class RBFNeuralNetwork(AbstractNeuralNetworkClassifier):
         n1, n2, n3 = self.layers_
         W1 = self._create_shared_matrix('W1', n1, n2)
         W2 = self._create_shared_matrix('W2', n2, n3)
-        # this parameter is responsible for scaling, it is computed as well
+        # this parameter is responsible for scaling, it is optimised too
         G = theano.shared(value=0.1, name='G')
         self.parameters['G'] = G
 
@@ -406,7 +409,7 @@ class PairwiseNeuralNetwork(AbstractNeuralNetworkClassifier):
 
 
 class PairwiseSoftplusNeuralNetwork(AbstractNeuralNetworkClassifier):
-    """The result is computed as h = sigmoid(Ax), output = sum_{ij} B_ij h_i (1 - h_j) """
+    """The result is computed as h = softplus(Ax), output = sum_{ij} B_ij h_i (1 - h_j) """
 
     def prepare(self):
         n1, n2, n3 = self.layers_
@@ -426,7 +429,7 @@ class ObliviousNeuralNetwork(AbstractNeuralNetworkClassifier):
     """ Uses idea of oblivious trees,
      but not strict cuts on features and not rectangular cuts, but linear conditions
      """
-    # TODO: needs pretraining, like oblivious tree first
+    # TODO: needs pretraining (i.e. by oblivious tree) first
     def prepare(self):
         n1, n2, n3 = self.layers_
         W1 = theano.shared(value=self.random_state.normal(size=[n1, n2]).astype(floatX), name='W1')
